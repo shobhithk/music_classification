@@ -1,0 +1,100 @@
+from flask import Flask, render_template, request
+from werkzeug.utils import secure_filename
+import numpy as np
+from collections import defaultdict
+from file_process import testSet,dataset,trainingSet,accuracy1
+from python_speech_features import mfcc
+import scipy.io.wavfile as wav
+import numpy as np
+from tempfile import TemporaryFile
+import os
+import pickle
+import random
+import operator
+import math
+
+app = Flask(__name__)
+
+app.config["UPLOAD_FOLDER"] = "Files/"
+
+def distance(instance1, instance2, k):
+    distance = 0
+    mm1 = instance1[0]
+    cm1 = instance1[1]
+    mm2 = instance2[0]
+    cm2 = instance2[1]
+    distance = np.trace(np.dot(np.linalg.inv(cm2), cm1))
+    distance += (np.dot(np.dot((mm2-mm1).transpose(), np.linalg.inv(cm2)), mm2-mm1))
+    distance += np.log(np.linalg.det(cm2)) - np.log(np.linalg.det(cm1))
+    distance -= k
+    return distance
+
+def getNeighbors(trainingSet, instance, k):
+    distances = []
+    for x in range (len(trainingSet)):
+        dist = distance(trainingSet[x], instance, k )+ distance(instance, trainingSet[x], k)
+        distances.append((trainingSet[x][2], dist))
+    distances.sort(key=operator.itemgetter(1))
+    neighbors = []
+    for x in range(k):
+        neighbors.append(distances[x][0])
+    return neighbors
+
+def nearestClass(neighbors):
+    classVote = {}
+    for x in range(len(neighbors)):
+        response = neighbors[x]
+        if response in classVote:
+            classVote[response]+=1
+        else:
+            classVote[response]=1
+    sorter = sorted(classVote.items(), key = operator.itemgetter(1), reverse=True)
+    return sorter[0][0]
+
+def getAccuracy(testSet, predictions):
+    correct = 0
+    for x in range (len(testSet)):
+        if testSet[x][-1]==predictions[x]:
+            correct+=1
+    return 1.0*correct/len(testSet)
+
+
+@app.route('/')
+def upload_file():
+	return render_template('index.html')
+
+@app.route('/view-code')
+def view_code():
+    return render_template('viewcode.html')
+
+@app.route('/uploader', methods=['GET', 'POST'])
+def display_file():
+	if request.method == 'POST':
+		f = request.files['file']
+		filename = secure_filename(f.filename)
+
+		f.save(app.config['UPLOAD_FOLDER'] + filename)
+
+		results = defaultdict(int)
+
+		i = 1
+		for folder in os.listdir("./Data/genres_original/"):
+			results[i] = folder
+			i += 1
+		path = app.config['UPLOAD_FOLDER'] + filename
+		(rate, sig) = wav.read(path)
+		mfcc_feat = mfcc(sig, rate, winlen=0.020, appendEnergy=False)
+		covariance = np.cov(np.matrix.transpose(mfcc_feat))
+		mean_matrix = mfcc_feat.mean(0)
+		feature = (mean_matrix, covariance, 0)
+
+		pred = nearestClass(getNeighbors(dataset, feature, 5))
+
+		content = results[pred]
+
+
+	return render_template('output.html', content=content, accuracy=f"{accuracy1 * 100}%")
+
+if __name__ == '__main__':
+	app.run(debug=True)
+
